@@ -67,6 +67,7 @@ func Downloader(url string, numThreads int) error{
 	remainingThreads := numWholeChunks % numThreads
 	if numWholeChunks == 0{
 		remainingThreads=1
+		numWholeChunks=1
 	}
 
 	// We have the required number of chunks along with the chunksize of each part.
