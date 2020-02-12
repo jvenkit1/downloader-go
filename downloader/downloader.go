@@ -14,6 +14,26 @@ import (
 
 var wg sync.WaitGroup
 
+func sendRequest(range_left, range_right, current_index int, url, pathPrefix string, failedThreads []bool) {
+	client := &http.Client{}
+	req, _ := http.NewRequest("GET", url, nil)
+
+	range_header := "bytes=" + strconv.Itoa(range_left) + "-" + strconv.Itoa(range_right-1)
+	req.Header.Add("Range", range_header)
+	resp, _ := client.Do(req)
+	defer resp.Body.Close()
+
+	// writing to a file
+	currFilePath := pathPrefix + strconv.Itoa(current_index)
+	outputFile, err := os.Create(currFilePath)
+	_, err = io.Copy(outputFile, resp.Body)
+	if err != nil {
+		failedThreads[current_index]=true;
+	}
+
+	wg.Done()
+}
+
 func countNumChunks(url string, chunkSize int) (int, int, error) {
 	res, err := http.Head(url)
 	if err != nil {
@@ -26,12 +46,16 @@ func countNumChunks(url string, chunkSize int) (int, int, error) {
 }
 
 func Downloader(url string, numThreads int) error{
-	pathPrefix:="dump/"
-	//pathPrefix:=""
+	// create dump folder
+	pathPrefix:="/tmp/dump/"
+	err := os.MkdirAll(pathPrefix, os.ModePerm)  // creating files at mode 0777
+	if err != nil {
+		return err
+	}
+
 	chunkSize := 256000  // each chunksize is 256Kb
 	numWholeChunks, remainderChunkSize, err := countNumChunks(url, chunkSize)
-
-	filename:=path.Base(url)
+	filename:=path.Base(url)  // parsing the output file name
 
 	out, err := os.Create(filename)
 	if err != nil{
@@ -41,19 +65,9 @@ func Downloader(url string, numThreads int) error{
 
 	numChunksPerThread := numWholeChunks/numThreads
 	remainingThreads := numWholeChunks % numThreads
-
 	if numWholeChunks == 0{
 		remainingThreads=1
 	}
-
-	logrus.WithFields(logrus.Fields{
-		"ChunkSize": chunkSize,
-		"numWholeChunks": numWholeChunks,
-		"RemainderChunk": remainderChunkSize,
-		"numChunksPerThread": numChunksPerThread,
-		"remainingThreads": remainingThreads,
-	}).Info("Divided data into chunks")
-
 
 	// We have the required number of chunks along with the chunksize of each part.
 	failedThreads := make([]bool, numWholeChunks+1)  // true if ith thread failed
@@ -68,29 +82,7 @@ func Downloader(url string, numThreads int) error{
 			range_left := (j+i) * chunkSize
 			range_right := (j+i + 1) * chunkSize
 
-			// Anonymous function
-			go func(range_left, range_right int, current_index int) {
-				client := &http.Client{}
-				req, _ := http.NewRequest("GET", url, nil)
-
-				range_header := "bytes=" + strconv.Itoa(range_left) + "-" + strconv.Itoa(range_right-1)
-				req.Header.Add("Range", range_header)
-				resp, _ := client.Do(req)
-				defer resp.Body.Close()
-
-				// writing to a file
-				currFilePath := pathPrefix + strconv.Itoa(current_index)
-				fmt.Print(currFilePath)
-				outputFile, err := os.Create(currFilePath)
-				_, err = io.Copy(outputFile, resp.Body)
-				//reader, _ := ioutil.ReadAll(resp.Body)
-				//temporaryData[current_index] = string(reader)
-				if err != nil {
-					failedThreads[current_index]=true;
-				}
-
-				wg.Done()
-			}(range_left, range_right, i+j)
+			go sendRequest(range_left, range_right, i+j, url, pathPrefix, failedThreads)
 		}
 	}
 	for i := 0; i < remainingThreads; i++ {
@@ -101,33 +93,11 @@ func Downloader(url string, numThreads int) error{
 		if( i==remainingThreads-1){
 			range_right+=remainderChunkSize
 		}
-
-		// Anonymous function
-		go func(range_left, range_right int, current_index int) {
-			client := &http.Client{}
-			req, _ := http.NewRequest("GET", url, nil)
-
-			range_header := "bytes=" + strconv.Itoa(range_left) + "-" + strconv.Itoa(range_right-1)
-			req.Header.Add("Range", range_header)
-			resp, _ := client.Do(req)
-			defer resp.Body.Close()
-
-			//reader, _ := ioutil.ReadAll(resp.Body)
-			//temporaryData[current_index] = string(reader)
-			// writing to a file
-			currFilePath := pathPrefix + strconv.Itoa(current_index)
-			outputFile, err := os.Create(currFilePath)
-			_, err = io.Copy(outputFile, resp.Body)
-			//reader, _ := ioutil.ReadAll(resp.Body)
-			//temporaryData[current_index] = string(reader)
-			if err != nil {
-				failedThreads[current_index]=true;
-			}
-
-			wg.Done()
-		}(range_left, range_right, i+numChunksPerThread)
+		go sendRequest(range_left, range_right, i+numChunksPerThread, url, pathPrefix, failedThreads)
 	}
 	wg.Wait()
+
+	// Retry : If any retries fail, return failure
 
 	//@TODO: Success check for the response
 	logrus.WithFields(logrus.Fields{
@@ -156,5 +126,10 @@ func Downloader(url string, numThreads int) error{
 	logrus.WithFields(logrus.Fields{
 		"Size": humanize.Bytes(filesize),
 	}).Info("Successfully completed the request")
+
+	err = os.RemoveAll(pathPrefix) // Removes the directory /tmp/dump/
+	if err != nil {
+		return err
+	}
 	return nil
 }
