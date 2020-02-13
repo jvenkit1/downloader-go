@@ -4,6 +4,7 @@ CLI File downloader written in Golang
 # Installation:
 1. Installing Golang:
   Please refer to the following link to download and setup Golang :
+  https://golang.org/doc/install
 2. Building a binary
   To rebuild a binary, run the following command: `go build main.go`
 
